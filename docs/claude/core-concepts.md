@@ -23,6 +23,7 @@ the generated items, the lifecycle hooks, and the `r2e-macros` internal layout.
 
 - `#[inject(identity)]` on handler parameters enables mixed controllers (public + protected endpoints), with each endpoint opting into authentication individually.
 - **Optional identity:** `#[inject(identity)] user: Option<AuthenticatedUser>` for endpoints working with or without auth.
+- **One extraction per request (#1500):** on a controller that also declares a struct-level identity of the same type, the parameter is a clone of the value the request data already holds — `identity_param` asks the `IdentityReuse` autoref probe (`r2e-core/src/web/extract.rs`) with `__r2e_meta_<Name>::guard_identity(&__facade)`. It reuses when the two types are equal and `Clone + 'static`; another type, a non-`Clone` identity, an `#[anonymous]` route (no façade), or a required parameter facing an absent `Option<T>` struct identity extract as before.
 
 ## `#[anonymous]` — Fail-Closed Auth With Per-Route Opt-Out
 

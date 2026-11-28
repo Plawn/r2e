@@ -866,8 +866,16 @@ impl<'a> Pipeline<'a> {
         )
     }
 
-    /// Extract the param-level `#[inject(identity)]` (bean-backed, witness in
-    /// the marker generic), binding `__arg_<i>` with the declared type.
+    /// Bind the param-level `#[inject(identity)]` as `__arg_<i>` with the
+    /// declared type.
+    ///
+    /// When the controller also declares a struct-level identity of the same
+    /// type, the value `bind_receiver` already extracted is cloned instead of
+    /// running the extractor a second time (task #1500): the `IdentityReuse`
+    /// probe answers `Some(..)` only when the two types are the same and the
+    /// type is `Clone`. Every other case — no struct-level identity, another
+    /// type, a non-`Clone` identity, an `#[anonymous]` route (no façade) —
+    /// extracts here (bean-backed, witness in the marker generic).
     fn identity_param(&self, params: &[(usize, &syn::PatType)]) -> TokenStream {
         let Some(id) = self.identity_param else {
             return quote! {};
@@ -882,13 +890,43 @@ impl<'a> Pipeline<'a> {
             .ty;
         let marker = identity_marker_for(self.fn_ident);
         let project = self.project(quote! { ::core::convert::Into::into(__e) });
-        quote_spanned! { ty.span() =>
-            let #arg = match <#ty as #krate::web::extract::FromRequestPartsVia<__R2eS, #marker>>
+        let extract = quote_spanned! { ty.span() =>
+            match <#ty as #krate::web::extract::FromRequestPartsVia<__R2eS, #marker>>
                 ::from_request_parts_via(&mut __parts, &__state).await
             {
                 Ok(__v) => __v,
                 #[allow(unreachable_code)]
                 Err(__e) => #project
+            }
+        };
+        if self.plan.anonymous {
+            return quote_spanned! { ty.span() => let #arg = #extract; };
+        }
+        let meta_mod = &self.meta_mod;
+        let inner = &id.ty;
+        // `Some(None)` is an absent *optional* struct-level identity: an
+        // optional parameter is absent too, a required one extracts to get
+        // its own rejection.
+        let reused_arms = if id.is_optional {
+            quote! { ::core::option::Option::Some(__v) => __v, }
+        } else {
+            quote! {
+                ::core::option::Option::Some(::core::option::Option::Some(__v)) => __v,
+            }
+        };
+        quote_spanned! { ty.span() =>
+            // Bound first so the façade borrow ends before the fallback awaits.
+            let __reused = {
+                #[allow(unused_imports)]
+                use #krate::web::extract::{IdentityReuseOpaque as _, IdentityReuseTyped as _};
+                (&#krate::web::extract::IdentityReuse::<_, #inner>::new(
+                    #meta_mod::guard_identity(&__facade),
+                ))
+                    .reuse()
+            };
+            let #arg: #ty = match __reused {
+                #reused_arms
+                _ => #extract,
             };
         }
     }

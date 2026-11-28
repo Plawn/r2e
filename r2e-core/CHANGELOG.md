@@ -15,6 +15,14 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- A route method's `#[inject(identity)]` parameter reuses the controller's
+  struct-level identity of the same type instead of extracting it a second
+  time (#1500) — one JWT validation / directory lookup per request instead of
+  two. Backed by the hidden `web::extract::IdentityReuse` probe, called by the
+  `r2e-macros` release that ships with this one.
+
 ## [0.12.0] - 2026-11-24
 
 ### Breaking

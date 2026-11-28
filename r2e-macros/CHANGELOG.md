@@ -15,6 +15,22 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Breaking
+
+- Codegen contract with `r2e-core` (#1500): a route method with an
+  `#[inject(identity)]` parameter now calls
+  `r2e_core::web::extract::IdentityReuse`. The macro syntax is unchanged; this
+  release needs the `r2e-core` release that ships with it.
+
+### Fixed
+
+- An `#[inject(identity)]` parameter on a controller that also has a
+  struct-level identity of the same type no longer runs the extractor a second
+  time (#1500): the parameter is a clone of the value already extracted. The
+  identity type must be `Clone` for the reuse; a parameter of another type, or
+  a non-`Clone` one, extracts as before. Applies to HTTP, SSE and WebSocket
+  routes.
+
 ## [0.13.0] - 2026-11-24
 
 ### Breaking

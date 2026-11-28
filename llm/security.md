@@ -1,7 +1,7 @@
 ---
 topic: security
 features: security
-tokens: ~2300
+tokens: ~2400
 requires: core-concepts
 ---
 
@@ -128,6 +128,12 @@ impl MixedController {
 }
 # fn main() {}
 ```
+
+On a controller that **also** has a struct-level identity of the same type,
+the parameter is a clone of the value already extracted — the extractor (JWT
+validation, a directory lookup in a custom identity) runs once per request.
+That needs the identity type to be `Clone`; a parameter of another type, or a
+non-`Clone` one, runs its own extraction.
 
 ### Role-based access
 

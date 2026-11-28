@@ -205,6 +205,10 @@ where
 /// per request from the parts, **before** guards run and before the body is
 /// read.
 ///
+/// A route method's `#[inject(identity)]` parameter of the same type as the
+/// struct-level identity reuses the value held here ([`IdentityReuse`]); a
+/// parameter of another type is one more extraction.
+///
 /// R2E-owned (not the backend's `FromRequestParts`) so the impl can be generic
 /// over the state and the per-field markers at once, and so a failure is a
 /// typed [`Rejection`] the route projects — never a pre-rendered response.
@@ -238,6 +242,65 @@ impl<M, T: Clone> CloneVia<M> for T {
     #[inline]
     fn clone_via(&self) -> Self {
         self.clone()
+    }
+}
+
+/// Autoref probe letting a route method's `#[inject(identity)]` parameter
+/// reuse the controller's struct-level identity instead of extracting it a
+/// second time.
+///
+/// `#[routes]` calls `(&IdentityReuse::<_, T>::new(found)).reuse()` with both
+/// traits imported, `found` being the struct-level identity the request data
+/// already holds and `T` the parameter's identity type. The by-value receiver
+/// ([`IdentityReuseTyped`]) applies when `T` is `Clone` and both types are
+/// `'static`; it answers
+///
+/// - `None` when the struct-level identity is another type (or the controller
+///   declares none) — the parameter runs its own extractor;
+/// - `Some(Some(identity))` — a clone of the value extracted once;
+/// - `Some(None)` when the struct-level identity is the same type, optional
+///   and absent.
+///
+/// Otherwise lookup autorefs to [`IdentityReuseOpaque`], which always answers
+/// `None`. Works because both types are concrete at the call site.
+#[doc(hidden)]
+pub struct IdentityReuse<'a, X, T>(Option<&'a X>, PhantomData<fn() -> T>);
+
+impl<'a, X, T> IdentityReuse<'a, X, T> {
+    #[must_use]
+    pub const fn new(found: Option<&'a X>) -> Self {
+        Self(found, PhantomData)
+    }
+}
+
+#[doc(hidden)]
+pub trait IdentityReuseTyped<T> {
+    fn reuse(&self) -> Option<Option<T>>;
+}
+
+impl<X: 'static, T: Clone + 'static> IdentityReuseTyped<T> for IdentityReuse<'_, X, T> {
+    #[inline]
+    fn reuse(&self) -> Option<Option<T>> {
+        if std::any::TypeId::of::<X>() != std::any::TypeId::of::<T>() {
+            return None;
+        }
+        Some(
+            self.0
+                .and_then(|found| (found as &dyn std::any::Any).downcast_ref::<T>())
+                .cloned(),
+        )
+    }
+}
+
+#[doc(hidden)]
+pub trait IdentityReuseOpaque<T> {
+    fn reuse(&self) -> Option<Option<T>>;
+}
+
+impl<X, T> IdentityReuseOpaque<T> for &IdentityReuse<'_, X, T> {
+    #[inline]
+    fn reuse(&self) -> Option<Option<T>> {
+        None
     }
 }
 
