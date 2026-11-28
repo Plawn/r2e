@@ -404,6 +404,335 @@ mod batching {
     }
 }
 
+// ── WsStream closing handshake: close / close_with / 1001 / 1009 ─────────
+//
+// The server side of these tests runs WITHOUT `TCP_NODELAY` (the bare `serve`
+// default), which is what makes a missing handshake visible on a loopback:
+// with it set, the close frame usually reaches the client before the reset
+// does. Both ends write while the server closes — the condition under which a
+// socket dropped with unread inbound frames is reset by the kernel.
+
+mod closing {
+    use std::time::{Duration, Instant};
+
+    use futures_util::{SinkExt, StreamExt};
+    use r2e_core::http::ws::{Message, WebSocket, WebSocketUpgrade};
+    use r2e_core::http::Routes;
+    use r2e_core::rt::CancelToken;
+    use r2e_core::web::ws::{
+        WsError, WsStream, CLOSE_GOING_AWAY, CLOSE_HANDSHAKE_TIMEOUT, CLOSE_MESSAGE_TOO_BIG,
+        SHUTDOWN_CLOSE_HANDSHAKE_TIMEOUT,
+    };
+    use tokio_tungstenite::tungstenite::Message as ClientMessage;
+
+    type ClientStream = tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >;
+
+    /// How the client learned the session was over.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Ending {
+        /// A close frame, with its code and reason (`None` when it carried none).
+        Closed(Option<(u16, String)>),
+        /// The stream ended, or failed, before any close frame.
+        Lost(String),
+    }
+
+    /// Serve one `/ws` route — `limit` is the route's `max_message_size`,
+    /// `build` turns the raw socket into the `WsStream` under test — and
+    /// return a connected client plus the handler's result.
+    async fn connect<B, F, Fut>(
+        limit: Option<usize>,
+        build: B,
+        f: F,
+    ) -> (
+        ClientStream,
+        tokio::sync::oneshot::Receiver<Result<(), WsError>>,
+    )
+    where
+        B: Fn(WebSocket) -> WsStream + Clone + Send + Sync + 'static,
+        F: Fn(WsStream) -> Fut + Clone + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<(), WsError>> + Send + 'static,
+    {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let tx = std::sync::Arc::new(std::sync::Mutex::new(Some(tx)));
+        let router = Routes::new().route(
+            "/ws",
+            r2e_core::http::routing::get(move |_: (), req: r2e_core::http::Request| {
+                let f = f.clone();
+                let build = build.clone();
+                let tx = tx.clone();
+                async move {
+                    use r2e_core::http::extract::FromRequestParts;
+                    let (mut parts, _) = req.into_parts();
+                    let upgrade = WebSocketUpgrade::from_request_parts(&mut parts, &())
+                        .await
+                        .map_err(r2e_core::http::response::IntoResponse::into_response)?;
+                    let upgrade = r2e_core::web::ws::__limit_upgrade(upgrade, limit, None);
+                    Ok::<_, r2e_core::http::Response>(upgrade.on_upgrade(
+                        move |socket| async move {
+                            let result = f(build(socket)).await;
+                            if let Some(tx) = tx.lock().unwrap().take() {
+                                let _ = tx.send(result);
+                            }
+                        },
+                    ))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        r2e_core::rt::spawn(async move {
+            r2e_core::http::server::serve(
+                listener,
+                router,
+                std::future::pending::<()>(),
+                Default::default(),
+            )
+            .await
+            .unwrap();
+        });
+        let (client, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws"))
+            .await
+            .expect("client connect");
+        (client, rx)
+    }
+
+    /// Drive a client that writes one frame per millisecond for as long as the
+    /// socket accepts them, and report how the session ended on its read side.
+    async fn chatter_until_the_end(client: ClientStream) -> Ending {
+        let (mut sink, mut stream) = client.split();
+        let writer = r2e_core::rt::spawn(async move {
+            while sink.send(ClientMessage::text("client frame")).await.is_ok() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        });
+        let ending = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                match stream.next().await {
+                    Some(Ok(ClientMessage::Close(frame))) => {
+                        return Ending::Closed(
+                            frame.map(|f| (u16::from(f.code), f.reason.to_string())),
+                        );
+                    }
+                    Some(Ok(_)) => {}
+                    Some(Err(e)) => return Ending::Lost(e.to_string()),
+                    None => return Ending::Lost("stream ended".into()),
+                }
+            }
+        })
+        .await
+        .expect("the session never ended");
+        writer.abort();
+        ending
+    }
+
+    /// The handler's result. A handler that panicked never reports one, so
+    /// this is bounded: the test fails instead of hanging.
+    async fn finished(
+        done: tokio::sync::oneshot::Receiver<Result<(), WsError>>,
+    ) -> Result<(), WsError> {
+        tokio::time::timeout(Duration::from_secs(10), done)
+            .await
+            .expect("the handler never finished (it panicked or hung)")
+            .expect("the handler was dropped before finishing")
+    }
+
+    /// The server writes without reading, so the client's frames pile up
+    /// unread, then ends the session through `end`.
+    async fn write_then<E, Fut>(mut ws: WsStream, end: E) -> Result<(), WsError>
+    where
+        E: FnOnce(WsStream) -> Fut,
+        Fut: std::future::Future<Output = Result<(), WsError>>,
+    {
+        // Let the client's frames start piling up unread, then write a burst
+        // right before closing: without `TCP_NODELAY` the close frame queues
+        // behind those unacknowledged segments, and a socket dropped at that
+        // point discards it along with the reset.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        for i in 0..20 {
+            ws.send_text(format!("server frame {i}")).await?;
+        }
+        end(ws).await
+    }
+
+    const ROUNDS: usize = 30;
+
+    #[r2e_core::test]
+    async fn close_with_reaches_a_peer_that_is_still_writing() {
+        for round in 0..ROUNDS {
+            let (client, done) = connect(None, WsStream::new, |ws| {
+                write_then(ws, |mut ws| async move {
+                    ws.close_with(4001, "ticket expired").await
+                })
+            })
+            .await;
+            assert_eq!(
+                chatter_until_the_end(client).await,
+                Ending::Closed(Some((4001, "ticket expired".into()))),
+                "round {round}: the close frame must survive a writing peer"
+            );
+            assert!(finished(done).await.is_ok());
+        }
+    }
+
+    #[r2e_core::test]
+    async fn close_reaches_a_peer_that_is_still_writing() {
+        for round in 0..ROUNDS {
+            let (client, done) = connect(None, WsStream::new, |ws| {
+                write_then(ws, |mut ws| async move { ws.close().await })
+            })
+            .await;
+            assert_eq!(
+                chatter_until_the_end(client).await,
+                Ending::Closed(None),
+                "round {round}: the close frame must survive a writing peer"
+            );
+            assert!(finished(done).await.is_ok());
+        }
+    }
+
+    #[r2e_core::test]
+    async fn going_away_reaches_a_peer_that_is_still_writing() {
+        for round in 0..ROUNDS {
+            let token = CancelToken::new();
+            let fired = token.clone();
+            let (client, done) = connect(
+                None,
+                move |socket| WsStream::with_shutdown(socket, Some(token.clone())),
+                move |ws| {
+                    let fired = fired.clone();
+                    write_then(ws, |mut ws| async move {
+                        fired.cancel();
+                        assert!(ws.next().await.is_none(), "shutdown ends the stream");
+                        assert!(ws.next().await.is_none(), "and it stays ended");
+                        Ok(())
+                    })
+                },
+            )
+            .await;
+            assert_eq!(
+                chatter_until_the_end(client).await,
+                Ending::Closed(Some((CLOSE_GOING_AWAY, "server shutting down".into()))),
+                "round {round}: the 1001 must survive a writing peer"
+            );
+            assert!(finished(done).await.is_ok());
+        }
+    }
+
+    #[r2e_core::test]
+    async fn close_returns_as_soon_as_the_peer_answers() {
+        let (mut client, done) = connect(None, WsStream::new, |mut ws| async move {
+            let started = Instant::now();
+            ws.close_with(1000, "done").await?;
+            assert!(
+                started.elapsed() < CLOSE_HANDSHAKE_TIMEOUT / 2,
+                "an answering peer must end the wait, took {:?}",
+                started.elapsed()
+            );
+            assert!(
+                ws.next().await.is_none(),
+                "a closed stream reports end-of-stream"
+            );
+            Ok(())
+        })
+        .await;
+        // Reading the close frame queues the client's answer; the next poll
+        // flushes it.
+        while let Some(Ok(_)) = client.next().await {}
+        assert!(finished(done).await.is_ok());
+    }
+
+    #[r2e_core::test]
+    async fn close_gives_up_on_a_silent_peer_after_the_handshake_timeout() {
+        // The client never reads, so it never answers the close frame.
+        let (_client, done) = connect(None, WsStream::new, |mut ws| async move {
+            let started = Instant::now();
+            ws.close().await?;
+            let waited = started.elapsed();
+            assert!(
+                waited >= CLOSE_HANDSHAKE_TIMEOUT && waited < CLOSE_HANDSHAKE_TIMEOUT * 3,
+                "expected about {CLOSE_HANDSHAKE_TIMEOUT:?}, waited {waited:?}"
+            );
+            Ok(())
+        })
+        .await;
+        assert!(finished(done).await.is_ok());
+    }
+
+    #[r2e_core::test]
+    async fn going_away_gives_up_on_a_silent_peer_after_the_shutdown_timeout() {
+        let token = CancelToken::new();
+        token.cancel();
+        let (_client, done) = connect(
+            None,
+            move |socket| WsStream::with_shutdown(socket, Some(token.clone())),
+            |mut ws| async move {
+                let started = Instant::now();
+                assert!(ws.next().await.is_none());
+                let waited = started.elapsed();
+                assert!(
+                    waited >= SHUTDOWN_CLOSE_HANDSHAKE_TIMEOUT && waited < CLOSE_HANDSHAKE_TIMEOUT,
+                    "expected about {SHUTDOWN_CLOSE_HANDSHAKE_TIMEOUT:?}, waited {waited:?}"
+                );
+                Ok(())
+            },
+        )
+        .await;
+        assert!(finished(done).await.is_ok());
+    }
+
+    #[r2e_core::test]
+    async fn oversized_message_is_refused_with_1009() {
+        let (mut client, done) = connect(Some(1024), WsStream::new, |mut ws| async move {
+            match ws.next().await {
+                Some(Err(WsError::Recv(_))) => {}
+                other => panic!("expected a receive error, got {other:?}"),
+            }
+            assert!(
+                ws.next().await.is_none(),
+                "the stream is over after the refusal"
+            );
+            Ok(())
+        })
+        .await;
+        client
+            .send(ClientMessage::binary(vec![7u8; 4096]))
+            .await
+            .unwrap();
+        let frame = loop {
+            match tokio::time::timeout(Duration::from_secs(5), client.next())
+                .await
+                .expect("timed out waiting for the close frame")
+            {
+                Some(Ok(ClientMessage::Close(frame))) => break frame.expect("a coded close frame"),
+                Some(Ok(_)) => {}
+                other => panic!("expected a 1009 close frame, got {other:?}"),
+            }
+        };
+        assert_eq!(u16::from(frame.code), CLOSE_MESSAGE_TOO_BIG);
+        assert_eq!(frame.reason.to_string(), "message too big");
+        assert!(finished(done).await.is_ok());
+    }
+
+    #[r2e_core::test]
+    async fn message_within_the_limit_is_not_refused() {
+        let (mut client, done) = connect(Some(1024), WsStream::new, |mut ws| async move {
+            match ws.next().await {
+                Some(Ok(Message::Binary(bytes))) => assert_eq!(bytes.len(), 1024),
+                other => panic!("expected the binary message, got {other:?}"),
+            }
+            Ok(())
+        })
+        .await;
+        client
+            .send(ClientMessage::binary(vec![7u8; 1024]))
+            .await
+            .unwrap();
+        assert!(finished(done).await.is_ok());
+    }
+}
+
 // ─── requested_protocols ───
 
 fn offered(lines: &[&str]) -> Vec<String> {

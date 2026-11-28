@@ -187,7 +187,7 @@ async fn chat(&self, mut ws: WsStream) {
 }
 ```
 
-When shutdown is triggered, `WsStream::next()` sends the peer a close frame with code **1001 Going Away** and returns `None` — the loop exits, the handler returns, the handle is joined. `ws.shutdown_requested().await` is the same signal as a bare future (for a `select!` on the send side — it borrows nothing, so holding it across an await keeps the session `Send`), and `ws.shutdown_token()` exposes the token itself.
+When shutdown is triggered, `WsStream::next()` sends the peer a close frame with code **1001 Going Away**, waits briefly for the peer's close frame (at most `SHUTDOWN_CLOSE_HANDSHAKE_TIMEOUT`, 150 ms, so a peer that is still writing receives the frame instead of a TCP reset) and returns `None` — the loop exits, the handler returns, the handle is joined. `ws.shutdown_requested().await` is the same signal as a bare future (for a `select!` on the send side — it borrows nothing, so holding it across an await keeps the session `Send`), and `ws.shutdown_token()` exposes the token itself.
 
 A handler that never touches the receive side (or ignores the end-of-stream) gets nothing worse than any other stubborn task: after `shutdown_grace_period` it is abandoned — detached, not aborted — with `warn!(phase = "tracked-handle join", service = "ws:MyController::my_method", …)`, and shutdown proceeds to `on_stop`. With no grace period configured, shutdown waits for it indefinitely.
 

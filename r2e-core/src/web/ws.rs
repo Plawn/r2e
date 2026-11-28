@@ -36,6 +36,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use crate::http::ws::{CloseFrame, Message, WebSocket};
 use crate::rt::sync::broadcast;
@@ -156,13 +157,35 @@ impl std::error::Error for WsError {}
 /// `WsStream` also implements [`futures_util::Sink<Message>`], so it composes
 /// with `SinkExt` combinators (`send_all`, `forward`, …).
 ///
+/// # Closing
+///
+/// End a session with [`close`](Self::close) or
+/// [`close_with`](Self::close_with) (a code and a reason). Both run the
+/// RFC 6455 closing handshake: once the close frame is written they keep
+/// reading — and discarding — what the peer sends until its own close frame
+/// arrives, for at most [`CLOSE_HANDSHAKE_TIMEOUT`]. Dropping a socket that
+/// still has unread inbound bytes makes the kernel reset the connection, and a
+/// reset can discard what was on its way to the peer, the close frame
+/// included: a peer that was still writing would see `connection reset`
+/// instead of the code and the reason.
+///
+/// The same handshake follows the two close frames the stream writes on its
+/// own: the [`CLOSE_GOING_AWAY`] of an app shutdown and the
+/// [`CLOSE_MESSAGE_TOO_BIG`] answering an oversized message.
+///
+/// Not covered: a close frame written by hand
+/// (`send(Message::Close(..))`), the [`Sink`] implementation's `close`
+/// (`SinkExt::close`), and anything done on the socket after
+/// [`into_inner`](Self::into_inner). Prefer `close_with`.
+///
 /// # Shutdown
 ///
 /// A stream built by a generated `#[ws(...)]` route watches the app shutdown
 /// token. When graceful shutdown starts, the **next**
 /// [`next`](Self::next)/[`next_text`](Self::next_text)/[`next_json`](Self::next_json)/[`on_each`](Self::on_each)
-/// call sends a `1001 Going Away` close frame and then reports end-of-stream
-/// (`None`) — so the usual `while let Some(msg) = ws.next().await` loop ends by
+/// call sends a `1001 Going Away` close frame, waits up to
+/// [`SHUTDOWN_CLOSE_HANDSHAKE_TIMEOUT`] for the peer's own close frame, and
+/// then reports end-of-stream (`None`) — so the usual `while let Some(msg) = ws.next().await` loop ends by
 /// itself, in time to run whatever comes after it. A loop that never awaits the
 /// receive side (a pure broadcast pusher, say) must observe
 /// [`shutdown_requested`](Self::shutdown_requested) itself, or it will be
@@ -175,14 +198,34 @@ pub struct WsStream {
     /// an app that is not served through `run()` (`TestApp`), which is exactly
     /// the "no shutdown to observe" case.
     shutdown: Option<CancelToken>,
-    /// Set once the going-away frame has been sent, so every later receive
-    /// reports end-of-stream instead of racing the close handshake.
-    going_away: bool,
+    /// Set once the stream has written a close frame of its own and run the
+    /// closing handshake, so every later receive reports end-of-stream instead
+    /// of reading a socket whose inbound side was already drained.
+    closed: bool,
 }
 
 /// WebSocket close code sent to live sessions when the app shuts down: RFC 6455
 /// `1001 Going Away`, "the server is going down".
 pub const CLOSE_GOING_AWAY: u16 = 1001;
+
+/// WebSocket close code sent when the peer's message or frame exceeds the
+/// route's `max_message_size` / `max_frame_size`: RFC 6455 `1009 Message Too
+/// Big`.
+pub const CLOSE_MESSAGE_TOO_BIG: u16 = 1009;
+
+/// How long [`WsStream::close`] / [`WsStream::close_with`] wait for the peer's
+/// close frame after writing theirs, discarding whatever else it sends.
+///
+/// A bound, not a delay: a peer that answers ends the wait at once. A peer
+/// that never reads — and so never answers — costs the full second.
+pub const CLOSE_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// The closing-handshake budget on the app-shutdown path, covering both the
+/// write of the [`CLOSE_GOING_AWAY`] frame and the wait for the peer's answer.
+///
+/// Shorter than [`CLOSE_HANDSHAKE_TIMEOUT`] so that a crowd of slow or silent
+/// peers cannot eat into `shutdown_grace_period`.
+pub const SHUTDOWN_CLOSE_HANDSHAKE_TIMEOUT: Duration = Duration::from_millis(150);
 
 impl crate::http::ws::IsWebSocket for WsStream {}
 
@@ -197,7 +240,7 @@ impl WsStream {
         Self {
             inner: socket,
             shutdown: None,
-            going_away: false,
+            closed: false,
         }
     }
 
@@ -210,7 +253,7 @@ impl WsStream {
         Self {
             inner: socket,
             shutdown,
-            going_away: false,
+            closed: false,
         }
     }
 
@@ -323,11 +366,69 @@ impl WsStream {
         self.inner.flush().await.map_err(WsError::Send)
     }
 
-    /// Flush queued frames, then close the sink.
+    /// Flush queued frames, send a close frame carrying no status code, and
+    /// run the closing handshake.
     ///
-    /// Sends the WebSocket close handshake; further `send*`/`feed*` calls fail.
+    /// Further `send*`/`feed*` calls fail and every later receive reports
+    /// end-of-stream. Resolves once the peer's close frame has arrived or
+    /// [`CLOSE_HANDSHAKE_TIMEOUT`] has elapsed — see the
+    /// [type docs](Self#closing). Use [`close_with`](Self::close_with) to tell
+    /// the peer why.
     pub async fn close(&mut self) -> Result<(), WsError> {
-        SinkExt::close(&mut self.inner).await.map_err(WsError::Send)
+        let written = SinkExt::close(&mut self.inner).await.map_err(WsError::Send);
+        self.closed = true;
+        written?;
+        self.await_peer_close(CLOSE_HANDSHAKE_TIMEOUT).await;
+        Ok(())
+    }
+
+    /// Flush queued frames, send a close frame with `code` and `reason`, and
+    /// run the closing handshake.
+    ///
+    /// `code` is an RFC 6455 status code — `1000` for a normal closure,
+    /// `4000..=4999` for application-defined ones. The reason travels in a
+    /// control frame: keep it under 123 bytes. Otherwise identical to
+    /// [`close`](Self::close).
+    ///
+    /// ```ignore
+    /// ws.close_with(4001, "ticket expired").await?;
+    /// ```
+    pub async fn close_with(
+        &mut self,
+        code: u16,
+        reason: impl Into<String>,
+    ) -> Result<(), WsError> {
+        let frame = CloseFrame {
+            code,
+            reason: reason.into().into(),
+        };
+        let written = self.send(Message::Close(Some(frame))).await;
+        self.closed = true;
+        written?;
+        self.await_peer_close(CLOSE_HANDSHAKE_TIMEOUT).await;
+        Ok(())
+    }
+
+    /// The second half of the closing handshake: read and discard what the
+    /// peer sends until its close frame, the end of the stream or an error,
+    /// for at most `budget`.
+    ///
+    /// Called only after a close frame of ours is on the wire. Skipping it
+    /// would drop the socket with the peer's in-flight frames unread, which
+    /// the kernel answers with a reset — see the [type docs](Self#closing).
+    /// The receive side stops yielding after its first error, so the loop
+    /// cannot spin.
+    async fn await_peer_close(&mut self, budget: Duration) {
+        use crate::rt::stream::StreamExt;
+        let inner = &mut self.inner;
+        let _ = crate::rt::timeout(budget, async {
+            while let Some(Ok(message)) = inner.next().await {
+                if matches!(message, Message::Close(_)) {
+                    break;
+                }
+            }
+        })
+        .await;
     }
 
     // ── Receive ──
@@ -340,9 +441,25 @@ impl WsStream {
     /// returns `None` immediately. Nothing is lost that would not be lost
     /// anyway: the alternative is the session being killed outright when the
     /// runtime goes down. See the [type docs](Self#shutdown).
+    ///
+    /// A message or frame over the route's `max_message_size` /
+    /// `max_frame_size` is reported as `Some(Err(WsError::Recv(_)))`, after a
+    /// [`CLOSE_MESSAGE_TOO_BIG`] close frame has been sent to the peer; the
+    /// stream is over from then on.
     pub async fn next(&mut self) -> Option<Result<Message, WsError>> {
+        let received = self.receive().await;
+        if let Some(Err(WsError::Recv(error))) = &received
+            && crate::http::ws::is_message_too_big(error)
+        {
+            self.refuse_too_big().await;
+        }
+        received
+    }
+
+    /// [`next`](Self::next) without the answer to an oversized message.
+    async fn receive(&mut self) -> Option<Result<Message, WsError>> {
         use crate::rt::stream::StreamExt;
-        if self.going_away {
+        if self.closed {
             return None;
         }
         // Clone the token out: `cancelled()` borrows `self.shutdown` while
@@ -367,15 +484,48 @@ impl WsStream {
         }
     }
 
-    /// Send the going-away close frame, once. Errors are swallowed: the peer
-    /// may already be gone, and either way the session ends here.
+    /// Send the going-away close frame, once, and run the closing handshake.
+    /// Errors are swallowed: the peer may already be gone, and either way the
+    /// session ends here.
+    ///
+    /// One budget covers the write and the wait: a peer that stopped reading
+    /// must not hold the session — and the drain — until the grace period
+    /// runs out.
     async fn begin_going_away(&mut self) {
-        self.going_away = true;
+        self.closed = true;
         let frame = CloseFrame {
             code: CLOSE_GOING_AWAY,
             reason: "server shutting down".into(),
         };
-        let _ = self.send(Message::Close(Some(frame))).await;
+        let _ = crate::rt::timeout(SHUTDOWN_CLOSE_HANDSHAKE_TIMEOUT, async {
+            if self.send(Message::Close(Some(frame))).await.is_ok() {
+                self.await_peer_close(SHUTDOWN_CLOSE_HANDSHAKE_TIMEOUT)
+                    .await;
+            }
+        })
+        .await;
+    }
+
+    /// Answer an oversized message with a [`CLOSE_MESSAGE_TOO_BIG`] close
+    /// frame. Best effort, errors swallowed: the receive error is what the
+    /// caller gets either way.
+    ///
+    /// The receive side is finished after a size error, so there is nothing
+    /// left to drain here: when the oversized frame was refused on its header,
+    /// its payload is still inbound and the connection may be reset once the
+    /// socket is dropped. The close frame is flushed before that.
+    async fn refuse_too_big(&mut self) {
+        self.closed = true;
+        let frame = CloseFrame {
+            code: CLOSE_MESSAGE_TOO_BIG,
+            reason: "message too big".into(),
+        };
+        let _ = crate::rt::timeout(CLOSE_HANDSHAKE_TIMEOUT, async {
+            if self.send(Message::Close(Some(frame))).await.is_ok() {
+                self.await_peer_close(CLOSE_HANDSHAKE_TIMEOUT).await;
+            }
+        })
+        .await;
     }
 
     /// Receive the next text message, skipping non-text messages.

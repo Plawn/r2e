@@ -15,6 +15,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Added
+
+- `ws::is_message_too_big(&Error)`: whether a WebSocket receive error is a
+  message or frame over the session's size limits. Classified by type, so
+  callers do not match on the error text.
+
 ## [0.7.1] - 2026-11-10
 
 ### Added

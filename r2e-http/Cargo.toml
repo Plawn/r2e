@@ -17,7 +17,7 @@ default = []
 # Additive: when enabled it takes precedence over the default serde_json
 # backend. See plans/json-codec-containment.md §3.3.
 json-sonic = ["dep:sonic-rs"]
-ws = ["axum/ws"]
+ws = ["axum/ws", "dep:tungstenite"]
 multipart = ["axum/multipart"]
 quic = ["dep:quinn", "dep:h3", "dep:h3-quinn", "dep:rustls", "dep:rustls-pemfile", "dep:http-body", "dep:http-body-util"]
 
@@ -31,6 +31,9 @@ serde = {workspace = true}
 # paths composing with the façade (plans/json-codec-containment.md §1.3).
 serde_json = {workspace = true}
 sonic-rs = {workspace = true, optional = true}
+# Only to downcast a receive error to the protocol crate's `Capacity` variant
+# (`ws::is_message_too_big`); axum re-exports no typed view of it.
+tungstenite = {workspace = true, optional = true}
 quinn = {workspace = true, optional = true}
 h3 = {workspace = true, optional = true}
 h3-quinn = {workspace = true, optional = true}

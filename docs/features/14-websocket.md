@@ -113,7 +113,8 @@ away — the frame is on the wire when the future resolves. For bulk transport
 | `feed_text(text)` | Queue a text message without flushing |
 | `feed_binary(bytes)` | Queue a binary message without flushing — `Bytes` payload, no copy |
 | `flush()` | Write every queued frame; a no-op when nothing is queued |
-| `close()` | Flush, then send the close handshake |
+| `close()` | Flush, send a close frame, then wait for the peer's (bounded) |
+| `close_with(code, reason)` | Same, with an application close code (`4000`–`4999`) and a reason |
 
 ```rust
 for message in batch {
@@ -121,6 +122,18 @@ for message in batch {
 }
 ws.flush().await?;
 ```
+
+### Closing a session
+
+End a session with `close()` or `close_with(code, reason)` rather than by returning from the handler:
+
+```rust
+ws.close_with(4001, "ticket expired").await?;
+```
+
+Both run the **closing handshake**: after the close frame is written, the server keeps reading — and discarding — what the peer sends until the peer's own close frame arrives, for at most `CLOSE_HANDSHAKE_TIMEOUT` (1 s). This is what makes the close code reach a client that is still writing: a socket dropped with unread inbound frames is reset by the kernel, and a reset can destroy the close frame before the client reads it (it then sees an abnormal `1006` closure instead of your code). After either call, `next()` returns `None`.
+
+The handshake is not run when a close frame is sent by hand (`send(Message::Close(..))`), through the `Sink` impl, or on the raw socket from `into_inner()` — there the frame is written and the socket dropped as soon as the handler returns.
 
 `feed` vs `send`: `send(msg)` is exactly `feed(msg)` + `flush()`. Frames are
 delivered in `feed` order; a `send*` after some `feed*` flushes the whole queue.
@@ -518,7 +531,7 @@ impl RealtimeController {
 }
 ```
 
-A message over the bound ends the connection: the read fails and the socket is dropped, without the message reaching the handler. It is not buffered first — with `max_message_size` set, the frame limit is clamped to it (`min(max_frame_size or 16 MiB, max_message_size)`), so an oversized single-frame message is refused on its frame header, and a fragmented one is cut as soon as the accumulated size passes the bound. `max_frame_size` alone bounds each frame and leaves the message default.
+A message over the bound ends the connection: the server answers with a **`1009` Message Too Big** close frame (`CLOSE_MESSAGE_TOO_BIG`), the read fails (`next()` yields the error, then `None`), and the message never reaches the handler. It is not buffered first — with `max_message_size` set, the frame limit is clamped to it (`min(max_frame_size or 16 MiB, max_message_size)`), so an oversized single-frame message is refused on its frame header, and a fragmented one is cut as soon as the accumulated size passes the bound. `max_frame_size` alone bounds each frame and leaves the message default.
 
 The limits apply to what the server reads, not to what the handler sends. In tests, `WsTestClient::assert_closed()` waits for the server to end the connection.
 

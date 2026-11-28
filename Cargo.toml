@@ -243,6 +243,10 @@ rustls-pemfile = "2"
 
 # Testing
 tokio-tungstenite = "0.29"
+# The WebSocket protocol crate behind axum's `ws` feature. Named by r2e-http
+# alone, to classify a receive error (`ws::is_message_too_big`); keep it on
+# the version axum resolves, or that downcast silently stops matching.
+tungstenite = { version = "0.29", default-features = false }
 
 # Dev
 tempfile = "3"

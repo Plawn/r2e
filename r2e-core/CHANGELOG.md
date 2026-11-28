@@ -15,6 +15,28 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- WebSocket close frames no longer get lost when the peer is still writing
+  (#1499). `WsStream::close()` and the `1001 Going Away` sent at shutdown now
+  run the closing handshake: after the close frame is written, inbound frames
+  are read and discarded until the peer's close frame, bounded by
+  `CLOSE_HANDSHAKE_TIMEOUT` (1 s) and `SHUTDOWN_CLOSE_HANDSHAKE_TIMEOUT`
+  (150 ms). Before, the socket was dropped with unread data, the kernel reset
+  the connection, and the client saw `1006` instead of the close code.
+  `close()` on a peer that never answers now takes up to 1 s to return, and
+  `next()` returns `None` after it.
+- A message over `max_message_size` / `max_frame_size` is answered with a
+  `1009` Message Too Big close frame (#1503) instead of a bare disconnect.
+  `next()` still yields the receive error, then `None`.
+
+### Added
+
+- `WsStream::close_with(code, reason)`: close with an application close code,
+  through the same closing handshake.
+- `web::ws::CLOSE_MESSAGE_TOO_BIG`, `CLOSE_HANDSHAKE_TIMEOUT` and
+  `SHUTDOWN_CLOSE_HANDSHAKE_TIMEOUT`.
+
 ## [0.12.0] - 2026-11-24
 
 ### Breaking
